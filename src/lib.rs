@@ -251,15 +251,13 @@ impl YoutubeDl {
     }
 
     /// Run youtube-dl with the arguments specified through the builder.
-    pub fn run(&self) -> Result<YoutubeDlOutput, Error> {
+    pub async fn run(&self) -> Result<YoutubeDlOutput, Error> {
         use serde_json::{json, Value};
-        use std::io::Read;
-        use std::process::{Command, Stdio};
-        use wait_timeout::ChildExt;
+        use std::process::Stdio;
 
         let process_args = self.process_args();
         let path = self.path();
-        let mut child = Command::new(path)
+        let mut child = tokio::process::Command::new(path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .args(process_args)
@@ -269,20 +267,23 @@ impl YoutubeDl {
         // We don't need to do this for stderr since only stdout has potentially giant JSON.
         let mut stdout = Vec::new();
         let child_stdout = child.stdout.take();
-        std::io::copy(&mut child_stdout.unwrap(), &mut stdout)?;
+        tokio::io::copy(&mut child_stdout.unwrap(), &mut stdout).await?;
 
         let exit_code = if let Some(timeout) = self.process_timeout {
-            match child.wait_timeout(timeout)? {
-                Some(status) => status,
-                None => {
-                    child.kill()?;
+            match tokio::time::timeout(timeout, child).await {
+                Ok(result) => match result {
+                    Ok(status) => status,
+                    Err(err) => {
+                        return Err(Error::Io(err));
+                    }
+                },
+                Err(_) => {
                     return Err(Error::ProcessTimeout);
                 }
             }
         } else {
-            child.wait()?
+            child.await?
         };
-
         if exit_code.success() {
             let value: Value = serde_json::from_reader(stdout.as_slice())?;
 
@@ -295,14 +296,9 @@ impl YoutubeDl {
                 Ok(YoutubeDlOutput::SingleVideo(Box::new(video)))
             }
         } else {
-            let mut stderr = vec![];
-            if let Some(mut reader) = child.stderr {
-                reader.read_to_end(&mut stderr)?;
-            }
-            let stderr = String::from_utf8(stderr).unwrap_or_default();
             Err(Error::ExitCode {
                 code: exit_code.code().unwrap_or(1),
-                stderr,
+                stderr: "yrf".to_string(),
             })
         }
     }
@@ -313,42 +309,57 @@ mod tests {
     use super::YoutubeDl;
     use std::time::Duration;
 
-    #[test]
-    fn test_youtube_url() {
+    #[tokio::test]
+    async fn test_youtube_url() {
         let output = YoutubeDl::new("https://www.youtube.com/watch?v=7XGyWcuYVrg")
             .socket_timeout("15")
             .run()
+            .await
             .unwrap()
             .to_single_video();
         assert_eq!(output.id, "7XGyWcuYVrg");
     }
 
-    #[test]
-    fn test_with_timeout() {
+    #[tokio::test]
+    async fn test_with_timeout() {
         let output = YoutubeDl::new("https://www.youtube.com/watch?v=7XGyWcuYVrg")
             .socket_timeout("15")
             .process_timeout(Duration::from_secs(15))
             .run()
+            .await
             .unwrap()
             .to_single_video();
         assert_eq!(output.id, "7XGyWcuYVrg");
     }
 
-    #[test]
-    fn test_unknown_url() {
+    #[tokio::test]
+    async fn test_unknown_url() {
         YoutubeDl::new("https://www.rust-lang.org")
             .socket_timeout("15")
             .process_timeout(Duration::from_secs(15))
             .run()
+            .await
             .unwrap_err();
     }
 
-    #[test]
-    fn test_search() {
+    #[tokio::test]
+    async fn test_playlist_timeout() {
+        YoutubeDl::new("https://www.youtube.com/list=PLuDoiEqVUgejiZy0AOEEOLY2YFFXncwEA")
+            .socket_timeout("15")
+            .process_timeout(Duration::from_secs(15))
+            .run()
+            .await
+            .unwrap()
+            .to_playlist();
+    }
+
+    #[tokio::test]
+    async fn test_search() {
         let output = YoutubeDl::new("Never Gonna Give You Up")
             .socket_timeout("15")
             .process_timeout(Duration::from_secs(15))
             .run()
+            .await
             .unwrap()
             .to_playlist();
         assert_eq!(output.entries.unwrap().first().unwrap().id, "dQw4w9WgXcQ");
