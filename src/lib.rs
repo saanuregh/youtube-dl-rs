@@ -343,7 +343,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_playlist_timeout() {
-        YoutubeDl::new("https://www.youtube.com/list=PLuDoiEqVUgejiZy0AOEEOLY2YFFXncwEA")
+        YoutubeDl::new("https://www.youtube.com/playlist?list=PLuDoiEqVUgejiZy0AOEEOLY2YFFXncwEA")
             .socket_timeout("15")
             .process_timeout(Duration::from_secs(15))
             .run()
