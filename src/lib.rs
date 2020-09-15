@@ -245,7 +245,6 @@ impl YoutubeDl {
         }
         args.push("-J");
         args.push(&self.query);
-        log::debug!("youtube-dl arguments: {:?}", args);
 
         args
     }
